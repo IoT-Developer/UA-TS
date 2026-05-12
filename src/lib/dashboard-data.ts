@@ -27,12 +27,7 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
   };
 }
 
-/**
- * The student's most recent in-progress enrollment + next lesson to resume.
- * Returns null if no active enrollments or all are complete.
- */
 export async function getContinueLearning(userId: string) {
-  // Find most recent enrollment with progress < 100
   const enrollment = await prisma.enrollment.findFirst({
     where: {
       userId,
@@ -41,6 +36,7 @@ export async function getContinueLearning(userId: string) {
     include: {
       course: {
         include: {
+          category: true,
           modules: {
             include: {
               lessons: {
@@ -52,12 +48,11 @@ export async function getContinueLearning(userId: string) {
         },
       },
     },
-    orderBy: { enrolledAt: 'desc' }, // proxy for last-accessed until we have lastAccessAt on enrollment
+    orderBy: { enrolledAt: 'desc' },
   });
 
   if (!enrollment) return null;
 
-  // Find next incomplete lesson
   const completedIds = new Set(
     (
       await prisma.lessonProgress.findMany({
@@ -82,9 +77,6 @@ export async function getContinueLearning(userId: string) {
   return null;
 }
 
-/**
- * All active enrollments for the cards grid.
- */
 export async function getEnrollments(userId: string) {
   return prisma.enrollment.findMany({
     where: { userId },
@@ -93,10 +85,6 @@ export async function getEnrollments(userId: string) {
   });
 }
 
-/**
- * Courses similar to what the user is enrolled in.
- * Strategy: same categories as enrolled courses, excluding already-enrolled.
- */
 export async function getSuggestedTracks(userId: string, limit = 3) {
   const enrollments = await prisma.enrollment.findMany({
     where: { userId },
@@ -105,7 +93,14 @@ export async function getSuggestedTracks(userId: string, limit = 3) {
 
   if (enrollments.length === 0) return [];
 
-  const categoryIds = [...new Set(enrollments.map((e) => e.course.categoryId))];
+  const categoryIds = [
+    ...new Set(
+      enrollments
+        .map((e) => e.course.categoryId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+
   const enrolledCourseIds = enrollments.map((e) => e.courseId);
 
   return prisma.course.findMany({
@@ -120,9 +115,6 @@ export async function getSuggestedTracks(userId: string, limit = 3) {
   });
 }
 
-/**
- * Recent lesson activity (last N).
- */
 export async function getRecentActivity(userId: string, limit = 5) {
   return prisma.lessonProgress.findMany({
     where: { userId },
@@ -140,21 +132,14 @@ export async function getRecentActivity(userId: string, limit = 5) {
   });
 }
 
-/**
- * Upcoming webinars relevant to this user.
- *  - includes LIVE and SCHEDULED in the future or recently started
- *  - if `enrolledOnly` is true on the webinar, user must be enrolled in the linked course
- *  - if no linked course, visible to anyone signed in (admin's choice via enrolledOnly=false)
- */
 export async function getUpcomingWebinars(userId: string, limit = 4) {
-  // Cut-off for "upcoming or just-started": from 1h ago into the future
   const cutoff = new Date(Date.now() - 60 * 60_000);
 
-  // Get user's enrolled course IDs (for filtering enrolledOnly webinars)
   const enrolledCourses = await prisma.enrollment.findMany({
     where: { userId },
     select: { courseId: true },
   });
+
   const enrolledCourseIds = enrolledCourses.map((e) => e.courseId);
 
   return prisma.webinar.findMany({
@@ -162,9 +147,9 @@ export async function getUpcomingWebinars(userId: string, limit = 4) {
       scheduledAt: { gte: cutoff },
       status: { in: ['SCHEDULED', 'LIVE'] },
       OR: [
-        { enrolledOnly: false }, // open to anyone signed in
-        { enrolledOnly: true, courseId: { in: enrolledCourseIds } }, // enrolled match
-        { enrolledOnly: true, courseId: null }, // standalone enrolled-only — show to all (admin's call)
+        { enrolledOnly: false },
+        { enrolledOnly: true, courseId: { in: enrolledCourseIds } },
+        { enrolledOnly: true, courseId: null },
       ],
     },
     include: { course: { select: { title: true, slug: true } } },
