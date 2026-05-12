@@ -1,0 +1,403 @@
+// =====================================================
+// Unified Automation EdTech Platform — Prisma Schema
+// Stack: Next.js 15 + Prisma + PostgreSQL (Neon/Supabase)
+// Auth: Clerk (clerkId synced via webhook)
+// Payments: Razorpay (amounts stored in paise as Int)
+// Video: VdoCipher (videoId stored per lesson)
+// =====================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- ENUMS ----------
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum AcademicStatus {
+  STUDENT
+  WORKING_PROFESSIONAL
+  JOB_SEEKER
+}
+
+enum WebinarStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum LessonType {
+  VIDEO
+  TEXT
+  PDF
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ---------- USERS ----------
+
+model User {
+  id          String   @id @default(cuid())
+  clerkId     String   @unique // synced from Clerk via webhook
+  email       String   @unique
+  name        String?
+  avatarUrl   String?
+  phone       String?  // collected, not verified in v1
+  
+  // Student profile fields (collected on first sign-in via /dashboard/profile)
+  dateOfBirth     DateTime?
+  college         String?
+  branch          String?
+  yearOfStudy     Int?
+  academicStatus  AcademicStatus?
+  
+  role        Role     @default(STUDENT)
+  
+  // Communication preferences (managed via /dashboard/settings)
+  emailNotifications  Boolean @default(true)   // transactional + course reminders
+  marketingEmails     Boolean @default(false)  // newsletters, promotions
+  
+  // Soft delete for DPDP compliance — actual identity wiped within 90 days
+  deletedAt   DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  enrollments    Enrollment[]
+  lessonProgress LessonProgress[]
+  quizAttempts   QuizAttempt[]
+  certificates   Certificate[]
+  orders         Order[]
+  coursesTaught  Course[]         @relation("InstructorCourses")
+  hostedWebinars Webinar[]        @relation("WebinarHost")
+  
+  @@index([clerkId])
+  @@index([email])
+}
+
+// ---------- CATALOG ----------
+
+model Category {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  iconUrl     String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  
+  courses Course[]
+  
+  @@index([slug])
+}
+
+model Course {
+  id              String       @id @default(cuid())
+  slug            String       @unique
+  title           String
+  subtitle        String?
+  description     String       @db.Text
+  thumbnailUrl    String?      // small/card thumbnail
+  coverImageUrl   String?      // hero image for course detail page
+  trailerVideoId  String?      // VdoCipher video ID for free preview
+  
+  // Tech stack chips: array of {slug, name, iconUrl} from preset list (or custom uploaded)
+  techStack       Json         @default("[]")
+  
+  level           CourseLevel  @default(BEGINNER)
+  status          CourseStatus @default(DRAFT)
+  language        String       @default("en")
+  
+  // Cached aggregates (recomputed on lesson change)
+  durationMinutes Int          @default(0)
+  lessonCount     Int          @default(0)
+  
+  // Pricing in paise to avoid float bugs (₹999 = 99900)
+  priceInPaise    Int          @default(0)
+  mrpInPaise      Int          @default(0) // for strikethrough display
+  
+  // Marketing copy as string arrays
+  whatYoullLearn  String[]
+  prerequisites   String[]
+  targetAudience  String[]
+  
+  categoryId      String
+  category        Category     @relation(fields: [categoryId], references: [id])
+  
+  instructorId    String
+  instructor      User         @relation("InstructorCourses", fields: [instructorId], references: [id])
+  
+  modules         Module[]
+  enrollments     Enrollment[]
+  certificates    Certificate[]
+  orders          Order[]
+  webinars        Webinar[]
+  
+  publishedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  
+  @@index([slug])
+  @@index([status, publishedAt])
+  @@index([categoryId])
+}
+
+model Module {
+  id        String   @id @default(cuid())
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title     String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  
+  lessons Lesson[]
+  quizzes Quiz[]
+  
+  @@index([courseId, order])
+}
+
+model Lesson {
+  id              String     @id @default(cuid())
+  moduleId        String
+  module          Module     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  
+  title           String
+  type            LessonType @default(VIDEO)
+  
+  // Video lessons
+  videoId         String?    // VdoCipher video ID
+  durationSeconds Int        @default(0)
+  
+  // Text/PDF lessons
+  textContent     String?    @db.Text
+  pdfUrl          String?    // R2/S3 URL
+  
+  order           Int        @default(0)
+  isFreePreview   Boolean    @default(false) // viewable without enrollment
+  
+  createdAt       DateTime   @default(now())
+  
+  progress LessonProgress[]
+  
+  @@index([moduleId, order])
+}
+
+// ---------- ENROLLMENT & PROGRESS ----------
+
+model Enrollment {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  courseId    String
+  course      Course    @relation(fields: [courseId], references: [id])
+  orderId     String?   @unique
+  order       Order?    @relation(fields: [orderId], references: [id])
+  
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+  progressPct Int       @default(0) // 0-100, cached
+  
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+}
+
+model LessonProgress {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId       String
+  lesson         Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  
+  completed      Boolean  @default(false)
+  watchedSeconds Int      @default(0)
+  lastAccessAt   DateTime @default(now())
+  
+  @@unique([userId, lessonId])
+  @@index([userId])
+}
+
+// ---------- QUIZZES ----------
+
+model Quiz {
+  id           String   @id @default(cuid())
+  moduleId     String
+  module       Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  title        String
+  passingScore Int      @default(60) // percent
+  createdAt    DateTime @default(now())
+  
+  questions Question[]
+  attempts  QuizAttempt[]
+  
+  @@index([moduleId])
+}
+
+model Question {
+  id              String @id @default(cuid())
+  quizId          String
+  quiz            Quiz   @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  
+  text            String  @db.Text
+  // Options stored as JSON: [{ id: "a", text: "Option A" }, ...]
+  options         Json
+  correctOptionId String
+  explanation     String? @db.Text
+  order           Int     @default(0)
+  
+  @@index([quizId])
+}
+
+model QuizAttempt {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  quizId      String
+  quiz        Quiz     @relation(fields: [quizId], references: [id])
+  
+  // Answers stored as JSON: [{ questionId, selectedOptionId }]
+  answers     Json
+  score       Int      // percent
+  passed      Boolean
+  attemptedAt DateTime @default(now())
+  
+  @@index([userId, quizId])
+}
+
+// ---------- CERTIFICATES ----------
+
+model Certificate {
+  id            String   @id @default(cuid())
+  // Public-facing ID for verification URL, e.g. UA-2026-A8X3K9
+  certificateNo String   @unique
+  
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  courseId      String
+  course        Course   @relation(fields: [courseId], references: [id])
+  
+  issuedAt      DateTime @default(now())
+  pdfUrl        String?  // generated PDF stored in R2/S3
+  
+  @@unique([userId, courseId])
+  @@index([certificateNo])
+}
+
+// ---------- COMMERCE ----------
+
+model Order {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  courseId        String
+  course          Course      @relation(fields: [courseId], references: [id])
+  
+  // All amounts in paise
+  amountInPaise   Int         // original price
+  discountInPaise Int         @default(0)
+  finalInPaise    Int         // what was charged
+  currency        String      @default("INR")
+  
+  couponId        String?
+  coupon          Coupon?     @relation(fields: [couponId], references: [id])
+  
+  // Razorpay fields
+  razorpayOrderId   String  @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+  
+  status     OrderStatus @default(PENDING)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  
+  enrollment Enrollment?
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model Coupon {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  description    String?
+  
+  // Use either discountPct OR discountAmount, not both
+  discountPct    Int?      // 0-100
+  discountAmount Int?      // in paise (flat discount)
+  
+  maxUses        Int?      // null = unlimited
+  usedCount      Int       @default(0)
+  
+  validFrom      DateTime?
+  validUntil     DateTime?
+  isActive       Boolean   @default(true)
+  
+  orders Order[]
+  
+  @@index([code])
+}
+
+// ---------- WEBINARS ----------
+
+model Webinar {
+  id              String        @id @default(cuid())
+  title           String
+  description     String?       @db.Text
+  
+  // Scheduling
+  scheduledAt     DateTime      // when it starts
+  durationMinutes Int           @default(60)
+  
+  // Zoom or Google Meet link — pasted by admin/instructor
+  joinUrl         String
+  
+  // Optional recording URL (set after the webinar)
+  recordingUrl    String?
+  
+  // Optional course association (null = standalone webinar)
+  courseId        String?
+  course          Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  
+  // Host (admin or instructor)
+  hostId          String
+  host            User          @relation("WebinarHost", fields: [hostId], references: [id])
+  
+  // Open to enrolled students only, or all signed-in users?
+  enrolledOnly    Boolean       @default(true)
+  
+  status          WebinarStatus @default(SCHEDULED)
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([scheduledAt])
+  @@index([courseId])
+  @@index([status, scheduledAt])
+}

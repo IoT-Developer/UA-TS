@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: #F4F1EA;
+    --bg-alt: #EDE8DD;
+    --ink: #0E0E0C;
+    --ink-muted: #5A564E;
+    --ink-subtle: #8A8378;
+    --accent: #FF5A1F;
+    --accent-glow: #FF7A3D;
+    --rule: #1A1A17;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+
+  ::selection {
+    background: var(--ink);
+    color: var(--bg);
+  }
+}
+
+@layer components {
+  /* Prose styling for legal / about pages */
+  .prose-content h2 {
+    @apply mt-12 mb-4 font-display text-2xl font-semibold tracking-tight first:mt-0 lg:text-3xl;
+  }
+  .prose-content h3 {
+    @apply mt-8 mb-3 font-display text-xl font-semibold tracking-tight;
+  }
+  .prose-content p {
+    @apply mb-4 leading-relaxed text-ink-muted;
+  }
+  .prose-content ul {
+    @apply mb-4 ml-6 list-disc space-y-2 text-ink-muted;
+  }
+  .prose-content ol {
+    @apply mb-4 ml-6 list-decimal space-y-2 text-ink-muted;
+  }
+  .prose-content a {
+    @apply text-ink underline decoration-accent decoration-2 underline-offset-2 transition hover:text-accent;
+  }
+  .prose-content strong {
+    @apply font-semibold text-ink;
+  }
+  .prose-content code {
+    @apply rounded bg-bg-alt px-1.5 py-0.5 font-mono text-sm;
+  }
+}
+
+@layer utilities {
+  /* Subtle dotted-grid background, evokes engineering paper */
+  .bg-grid {
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      rgba(14, 14, 12, 0.10) 1px,
+      transparent 0
+    );
+    background-size: 24px 24px;
+  }
+
+  /* Faint horizontal lines */
+  .bg-rules {
+    background-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(100% - 1px),
+      rgba(14, 14, 12, 0.06) 100%
+    );
+    background-size: 100% 32px;
+  }
+
+  /* Industrial-yellow underline accent */
+  .underline-accent {
+    background-image: linear-gradient(transparent 60%, var(--accent) 60%, var(--accent) 90%, transparent 90%);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+  }
+
+  /* Eyebrow label style: SMALL CAPS, tracked */
+  .eyebrow {
+    @apply font-mono text-eyebrow uppercase tracking-[0.18em] text-ink-muted;
+  }
+
+  /* Animation delays for staggered reveals */
+  .delay-100 { animation-delay: 100ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+}
